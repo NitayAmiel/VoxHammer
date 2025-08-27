@@ -293,7 +293,7 @@ def main():
 
     # Optional rendering parameters
     parser.add_argument(
-        "--num_views", type=int, default=150, help="Number of views to render"
+        "--num_views", type=int, default=50, help="Number of views to render"
     )
     parser.add_argument(
         "--resolution", type=int, default=512, help="Rendering resolution"
@@ -386,7 +386,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_model", type=str, default="assets/example/model.glb")
     parser.add_argument(
-        "--mask_model", type=str, default="assets/example/3d_edit_region.glb"
+        "--mask_model", type=str, default="assets/example/mask.glb"
     )
     parser.add_argument("--image_dir", type=str, default="assets/example/images")
     parser.add_argument("--output_dir", type=str, default="outputs")
