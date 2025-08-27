@@ -998,7 +998,7 @@ def run_edit(
     )
     assets_tgt = pipeline.decode_slat(slat_tgt, ["gaussian", "mesh"])
 
-    # torch.set_grad_enabled(True)
+    torch.set_grad_enabled(True)
     glb_tgt = postprocessing_utils.to_glb(
         assets_tgt["gaussian"][0],
         assets_tgt["mesh"][0],
