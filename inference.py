@@ -385,9 +385,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_model", type=str, default="assets/example/model.glb")
-    parser.add_argument(
-        "--mask_model", type=str, default="assets/example/mask.glb"
-    )
+    parser.add_argument("--mask_model", type=str, default="assets/example/mask.glb")
     parser.add_argument("--image_dir", type=str, default="assets/example/images")
     parser.add_argument("--output_dir", type=str, default="outputs")
     parser.add_argument(

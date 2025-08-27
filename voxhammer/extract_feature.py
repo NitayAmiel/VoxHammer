@@ -70,7 +70,7 @@ def get_data(frames, output_dir):
 
 
 def extract_features(output_dir, model="dinov2_vitl14_reg", batch_size=16):
-    dinov2_model = torch.hub.load("facebookresearch/dinov2", name, pretrained=True)
+    dinov2_model = torch.hub.load("facebookresearch/dinov2", model, pretrained=True)
     dinov2_model.eval().cuda()
     transform = transforms.Compose(
         [

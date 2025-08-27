@@ -79,7 +79,7 @@ class BpyRenderer:
         bpy.context.scene.render.film_transparent = True
 
         if self.engine == "CYCLES":
-            bpy.context.scene.cycles.device = "GPU"
+            bpy.context.scene.render.engine = "CYCLES"
             bpy.context.scene.cycles.samples = 128 if not self.geo_mode else 1
             bpy.context.scene.cycles.filter_type = "BOX"
             bpy.context.scene.cycles.filter_width = 1
@@ -93,8 +93,8 @@ class BpyRenderer:
             )
             bpy.context.scene.cycles.use_denoising = True
 
-            # 设置GPU计算
             try:
+                bpy.context.scene.cycles.device = "GPU"
                 bpy.context.preferences.addons["cycles"].preferences.get_devices()
                 bpy.context.preferences.addons[
                     "cycles"
@@ -207,17 +207,13 @@ class BpyRenderer:
             obj.hide_set(False)
 
     def convert_to_meshes(self):
-        print("aaaaaaa")
         bpy.ops.object.select_all(action="DESELECT")
         bpy.context.view_layer.objects.active = [
             obj for obj in bpy.context.scene.objects if obj.type == "MESH"
         ][0]
-        print("bbbbbb")
         for obj in bpy.context.scene.objects:
             obj.select_set(True)
-        print("ccccccc")
         bpy.ops.object.convert(target="MESH")
-        print("ddddddd")
 
     def triangulate_meshes(self):
         bpy.ops.object.select_all(action="DESELECT")
@@ -431,11 +427,8 @@ class BpyRenderer:
         if save_mesh:
             try:
                 self.unhide_all_objects()
-                print("aaaaaaa")
                 self.convert_to_meshes()
-                print("bbbbbb")
                 self.triangulate_meshes()
-                print("ccccccc")
                 print("[INFO] Meshes triangulated.")
 
                 ply_path = os.path.join(output_dir, "mesh.ply")
