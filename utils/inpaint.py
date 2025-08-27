@@ -24,7 +24,6 @@ def inpaint(
         background = Image.new("RGBA", image.size, (255, 255, 255, 255))
         background.paste(image, (0, 0), image)
         image = background.convert("RGB")
-        image.save("tmp.png")
 
     image = pipeline(
         prompt=prompt,
