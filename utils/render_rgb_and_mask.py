@@ -171,7 +171,7 @@ if __name__ == "__main__":
 
     source_model = args.source_model
     mask_model = args.mask_model
-    output_dir = os.path.join(args.output_dir, "images")
+    output_dir = os.path.join(args.output_dir)
 
     process(source_model, mask_model, output_dir)
 

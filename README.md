@@ -48,7 +48,7 @@ pip install /tmp/extensions/mip-splatting/submodules/diff-gaussian-rasterization
 ### Step 1 — Create a 3D mask
 Prepare a mesh that marks the editable region (e.g. `assets/example/mask.glb`).  
 
-Inputs required:  
+Inputs required (example):  
 - `assets/example/model.glb` — original 3D asset  
 - `assets/example/mask.glb` — mask mesh  
 
@@ -63,8 +63,8 @@ python utils/render_rgb_and_mask.py \
 ### Step 3 — Inpaint the rendered views
 ```bash
 python utils/inpaint.py \
---image_path outputs/images/render.png \
---mask_path outputs/images/mask.png \
+--image_path outputs/images/render_0002.png \
+--mask_path outputs/images/mask_0002.png \
 --output_dir outputs/images \
 --prompt "A dog."
 ```
