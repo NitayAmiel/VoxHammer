@@ -21,8 +21,6 @@ Please set up the Python environment following [TRELLIS](https://github.com/Micr
 - **Python**: 3.10  
 - **Conda** (Miniconda/Anaconda) recommended  
 
----
-
 ### Installation Steps
 
 1. Create and activate the environment
