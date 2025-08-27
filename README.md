@@ -12,6 +12,8 @@
 
 ## 📦 Installation
 
+Please set up the Python environment following [TRELLIS](https://github.com/Microsoft/TRELLIS), or you can create by:
+
 ### Prerequisites
 
 - **System**: Linux (Ubuntu 20.04/22.04 recommended)  
@@ -31,7 +33,7 @@ conda activate hammer
 
 2. Install requirements from `requirements.txt`
 ```bash
-pip install -r requirements_pip.txt
+pip install -r requirements.txt
 ``` 
 
 3. Install requirements from GitHub projects
@@ -54,17 +56,28 @@ Inputs required:
 
 ### Step 2 — Render RGB views & masks
 ```bash
-python utils/render_rgb_and_mask.py   --source_model assets/example/model.glb   --mask_model assets/example/mask.glb   --output_dir output_dir
+python utils/render_rgb_and_mask.py \
+--source_model path/to/model.glb \
+--mask_model path/to/mask.glb \
+--output_dir outputs
 ```
 
 ### Step 3 — Inpaint the rendered views
 ```bash
-python utils/inpaint.py   --image_path example/images/2d_render.png   --mask_path example/images/2d_mask.png   --output_dir outputs/images   --prompt "A dog."
+python utils/inpaint.py \
+--image_path outputs/images/render.png \
+--mask_path outputs/images/mask.png \
+--output_dir outputs/images \
+--prompt "A dog."
 ```
 
 ### Step 4 — Run inference
 ```bash
-python inference.py   --input_model assets/example/model.glb   -mask_model assets/example/mask.glb   --image_dir assets/example/images   --output_dir output_dir
+python inference.py \
+--input_model path/to/model.glb \
+--mask_model path/to/mask.glb \
+--image_dir outputs/images \
+--output_dir outputs
 ```
 
 ## Evaluation
