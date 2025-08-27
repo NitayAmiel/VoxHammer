@@ -57,8 +57,8 @@ Inputs required (example):
 ### Step 2 — Render RGB views & masks
 ```bash
 python utils/render_rgb_and_mask.py \
---source_model path/to/model.glb \
---mask_model path/to/mask.glb \
+--source_model assets/example/model.glb \
+--mask_model assets/example/mask.glb \
 --output_dir outputs
 ```
 
@@ -74,8 +74,8 @@ python utils/inpaint.py \
 ### Step 4 — Run inference
 ```bash
 python inference.py \
---input_model path/to/model.glb \
---mask_model path/to/mask.glb \
+--input_model assets/example/model.glb \
+--mask_model assets/example/mask.glb \
 --image_dir outputs/images \
 --output_dir outputs
 ```
