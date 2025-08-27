@@ -48,6 +48,8 @@ pip install /tmp/extensions/mip-splatting/submodules/diff-gaussian-rasterization
 ### Step 1 — Create a 3D mask
 Prepare a mesh that marks the editable region (e.g. `assets/example/mask.glb`).  
 
+https://github.com/user-attachments/assets/4f1265f5-911b-4a44-9ca2-d36496e83cea
+
 Inputs required (example):  
 - `assets/example/model.glb` — original 3D asset  
 - `assets/example/mask.glb` — mask mesh  
