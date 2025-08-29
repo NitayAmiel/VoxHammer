@@ -84,6 +84,12 @@ python inference.py \
 
 Explore [Edit3D-Bench](./Edit3D-Bench/) for more details.
 
+## License
+
+This project is licensed under the [MIT License](https://github.com/Nelipot-Lee/VoxHammer/blob/main/LICENSE).  
+However, please note that the code in **`trellis`** originates from the [TRELLIS](https://github.com/Microsoft/TRELLIS) project and remains subject to its original license terms.  
+Users must comply with the licensing requirements of [TRELLIS](https://github.com/Microsoft/TRELLIS) when using or redistributing that portion of the code.
+
 ## Citation
 
 ```
