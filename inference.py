@@ -293,7 +293,7 @@ def main():
 
     # Optional rendering parameters
     parser.add_argument(
-        "--num_views", type=int, default=50, help="Number of views to render"
+        "--num_views", type=int, default=150, help="Number of views to render"
     )
     parser.add_argument(
         "--resolution", type=int, default=512, help="Rendering resolution"
