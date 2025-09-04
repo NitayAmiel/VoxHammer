@@ -45,7 +45,14 @@ pip install /tmp/extensions/mip-splatting/submodules/diff-gaussian-rasterization
 
 ## 💡 Usage
 
-### Step 1 — Create a 3D mask
+### Step 1 - Add encoder to pipeline
+After downloading "TRELLIS-image-large" model, we can find "sparse_structure_encoder" in ckpts/ss_enc_conv3d_16l8_fp16.safetensors and "slat_encoder" in ckpts/slat_enc_swin8_B_64l8_fp16.safetensors.
+
+Before using these two models, we should add
+{"sparse_structure_encoder": "ckpts/ss_enc_conv3d_16l8_fp16", "slat_encoder": "ckpts/slat_enc_swin8_B_64l8_fp16"}
+in pipeline.json, then pipeline can correctly call these two models.
+
+### Step 2 — Create a 3D mask
 Prepare a mesh that marks the editable region (e.g. `assets/example/mask.glb`).  
 
 https://github.com/user-attachments/assets/4f1265f5-911b-4a44-9ca2-d36496e83cea
@@ -54,7 +61,7 @@ Inputs required (example):
 - `assets/example/model.glb` — original 3D asset  
 - `assets/example/mask.glb` — mask mesh  
 
-### Step 2 — Render RGB views & masks
+### Step 3 — Render RGB views & masks
 ```bash
 python utils/render_rgb_and_mask.py \
 --source_model assets/example/model.glb \
@@ -62,7 +69,7 @@ python utils/render_rgb_and_mask.py \
 --output_dir outputs
 ```
 
-### Step 3 — Inpaint the rendered views
+### Step 4 — Inpaint the rendered views
 ```bash
 python utils/inpaint.py \
 --image_path outputs/images/render_0002.png \
@@ -71,7 +78,7 @@ python utils/inpaint.py \
 --prompt "A dog."
 ```
 
-### Step 4 — Run inference
+### Step 5 — Run inference
 ```bash
 python inference.py \
 --input_model assets/example/model.glb \
