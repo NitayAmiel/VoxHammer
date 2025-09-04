@@ -45,7 +45,7 @@ pip install /tmp/extensions/mip-splatting/submodules/diff-gaussian-rasterization
 
 ## 💡 Usage
 
-### Step 1 - Add encoder to pipeline
+### Step 1 — Add encoder to pipeline
 After downloading "TRELLIS-image-large" model, we can find "sparse_structure_encoder" in ckpts/ss_enc_conv3d_16l8_fp16.safetensors and "slat_encoder" in ckpts/slat_enc_swin8_B_64l8_fp16.safetensors.
 
 Before using these two encoders, we should add
