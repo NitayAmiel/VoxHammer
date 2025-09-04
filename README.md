@@ -48,9 +48,9 @@ pip install /tmp/extensions/mip-splatting/submodules/diff-gaussian-rasterization
 ### Step 1 - Add encoder to pipeline
 After downloading "TRELLIS-image-large" model, we can find "sparse_structure_encoder" in ckpts/ss_enc_conv3d_16l8_fp16.safetensors and "slat_encoder" in ckpts/slat_enc_swin8_B_64l8_fp16.safetensors.
 
-Before using these two models, we should add
+Before using these two encoders, we should add
 {"sparse_structure_encoder": "ckpts/ss_enc_conv3d_16l8_fp16", "slat_encoder": "ckpts/slat_enc_swin8_B_64l8_fp16"}
-in pipeline.json, then pipeline can correctly call these two models.
+in pipeline.json, then the pipeline can correctly call them.
 
 ### Step 2 — Create a 3D mask
 Prepare a mesh that marks the editable region (e.g. `assets/example/mask.glb`).  
