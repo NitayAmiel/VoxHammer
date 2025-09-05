@@ -1,12 +1,18 @@
 import os
 import sys
+import math
+import matplotlib.pyplot as plt
+import numpy as np
 
 os.environ["ATTN_BACKEND"] = "sdpa"
 os.environ["SPCONV_ALGO"] = "native"
 
 from types import MethodType
 from typing import *
+import pdb
 
+import imageio
+from trellis.utils import render_utils
 import numpy as np
 import rembg
 import torch
@@ -18,7 +24,7 @@ from tqdm import tqdm
 
 import trellis.modules.sparse as sp
 from trellis.modules.spatial import patchify, unpatchify
-from trellis.pipelines import TrellisImageTo3DPipeline
+from trellis.pipelines import TrellisImageTo3DPipeline, TrellisTextTo3DPipeline
 from trellis.pipelines.samplers.flow_euler import FlowEulerGuidanceIntervalSampler
 from trellis.utils import postprocessing_utils
 
@@ -114,8 +120,26 @@ def preprocess_image(img_src_path, img_tgt_path, img_mask_path):
     pre_img_tgt = Image.fromarray((pre_img_tgt * 255).astype(np.uint8))
     return pre_img_src, pre_img_tgt, pre_img_mask
 
+def create_text_kv_mask(source_text, target_text, tokenizer):
+    # Tokenize both texts
+    source_tokens = tokenizer.encode(source_text)
+    target_tokens = tokenizer.encode(target_text)
+    
+    # Create base mask (1s = preserve, 0s = edit)
+    token_mask = torch.ones(77)  # CLIP uses 77 tokens
+    
+    # Find differing tokens
+    for i, (s_token, t_token) in enumerate(zip(source_tokens, target_tokens)):
+        if s_token != t_token:
+            token_mask[i] = 0
+            
+    # Expand to match attention dimensions [1, 16, 77, 64]
+    token_mask = token_mask.view(1, 1, 77, 1)
+    token_mask = token_mask.repeat(1, 16, 1, 64)  # Repeat for all heads and features
+    
+    return token_mask.cuda()
 
-def ply_to_ss_mask(coords_mask, pre_mask):
+def ply_to_ss_mask(coords_mask, pre_mask=None, use_text=False, source_text=None, target_text=None, tokenizer=None, head_dim=80):
     voxel_mask = torch.ones(1, 1, 64, 64, 64, dtype=torch.float)
     voxel_mask[:, 0, coords_mask[:, 0], coords_mask[:, 1], coords_mask[:, 2]] = 0
     voxel_mask = voxel_mask.cuda()
@@ -134,20 +158,30 @@ def ply_to_ss_mask(coords_mask, pre_mask):
     ss_self_kv_mask = ss_self_kv_mask.all(dim=2, keepdim=True)
     ss_self_kv_mask = ss_self_kv_mask.repeat(1, 1, 1024)
     ss_self_kv_mask = ss_self_kv_mask.reshape(1, 4096, 16, 64)
+
+    # ss_self_kv_mask = ss_self_kv_mask.repeat(1, 1, head_dim * 16)  # Changed from 1024
+    # ss_self_kv_mask = ss_self_kv_mask.reshape(1, 4096, 16, head_dim)  # Changed from 64
     ss_self_kv_mask = ss_self_kv_mask.permute(0, 2, 1, 3).contiguous().float().cuda()
 
-    img_mask = transforms.ToTensor()(pre_mask)
-    img_mask = (img_mask > 0).float()
-    cross_kv_mask = img_mask.reshape(37, 14, 37, 14)
-    cross_kv_mask = cross_kv_mask.permute(1, 3, 0, 2)
-    cross_kv_mask = cross_kv_mask.reshape(1, 196, 37, 37)
-    cross_kv_mask = cross_kv_mask.any(dim=1, keepdim=True)
-    cross_kv_mask = cross_kv_mask.repeat(1, 1024, 1, 1)
-    cross_kv_mask = cross_kv_mask.reshape(1, 1024, 1369)
-    cross_kv_mask = cross_kv_mask.permute(0, 2, 1)
-    cross_kv_mask = torch.cat((torch.ones(1, 5, 1024), cross_kv_mask), dim=1)
-    cross_kv_mask = cross_kv_mask.reshape(1, 1374, 16, 64)
-    cross_kv_mask = cross_kv_mask.permute(0, 2, 1, 3).contiguous().float().cuda()
+    if use_text:
+        # Create text-based cross attention mask
+        if source_text is None or target_text is None or tokenizer is None:
+            raise ValueError("For text mode, source_text, target_text, and tokenizer must be provided")
+        cross_kv_mask = create_text_kv_mask(source_text, target_text, tokenizer)
+    else:
+        # Original image-based mask code
+        img_mask = transforms.ToTensor()(pre_mask)
+        img_mask = (img_mask > 0).float()
+        cross_kv_mask = img_mask.reshape(37, 14, 37, 14)
+        cross_kv_mask = cross_kv_mask.permute(1, 3, 0, 2)
+        cross_kv_mask = cross_kv_mask.reshape(1, 196, 37, 37)
+        cross_kv_mask = cross_kv_mask.any(dim=1, keepdim=True)
+        cross_kv_mask = cross_kv_mask.repeat(1, 1024, 1, 1)
+        cross_kv_mask = cross_kv_mask.reshape(1, 1024, 1369)
+        cross_kv_mask = cross_kv_mask.permute(0, 2, 1)
+        cross_kv_mask = torch.cat((torch.ones(1, 5, 1024), cross_kv_mask), dim=1)
+        cross_kv_mask = cross_kv_mask.reshape(1, 1374, 16, 64)
+        cross_kv_mask = cross_kv_mask.permute(0, 2, 1, 3).contiguous().float().cuda()
 
     return voxel_mask, ss_latent_mask, ss_self_kv_mask, cross_kv_mask
 
@@ -915,6 +949,7 @@ def run_edit(
     cfg=[5.0, 6.0, 0.0, 0.0],
 ):
     ss_flow = pipeline.models["sparse_structure_flow_model"]
+    head_dim = ss_flow.blocks[0].cross_attn.to_kv.out_features // (2 * ss_flow.blocks[0].cross_attn.num_heads)
     ss_flow.forward = MethodType(ss_flow_forward, ss_flow)
     for block in ss_flow.blocks:
         trsfmr_obj = block
@@ -958,7 +993,7 @@ def run_edit(
     coords_preserve = coords_src[~torch.isin(coords_src, coords_delete).all(dim=1)]
 
     voxel_mask, ss_latent_mask, ss_self_kv_mask, cross_kv_mask = ply_to_ss_mask(
-        coords_preserve, pre_mask
+        coords_preserve, pre_mask, head_dim=head_dim
     )
     noise, ss_latent, ss_kv = sample_sparse_structure_inverse(
         pipeline, cond_src, voxel_src, cfg_strength_stage_1_inverse, skip_step
@@ -999,6 +1034,21 @@ def run_edit(
     assets_tgt = pipeline.decode_slat(slat_tgt, ["gaussian", "mesh"])
 
     torch.set_grad_enabled(True)
+    
+    video_dir = "./tmp/variant"
+    os.makedirs(video_dir, exist_ok=True)
+
+    # Render video for gaussian and mesh outputs
+    video_gs = render_utils.render_video(assets_tgt["gaussian"][0])["color"]
+    video_mesh = render_utils.render_video(assets_tgt["mesh"][0])["normal"]
+
+    # Concatenate gaussian and mesh frames side by side
+    video = [np.concatenate([frame_gs, frame_mesh], axis=1) for frame_gs, frame_mesh in zip(video_gs, video_mesh)]
+
+    # Save the video
+    video_path = os.path.join(video_dir, "edit_result_gs.mp4")
+    imageio.mimsave(video_path, video, fps=30)
+    print(f"Saved edit result video to {video_path}")
     glb_tgt = postprocessing_utils.to_glb(
         assets_tgt["gaussian"][0],
         assets_tgt["mesh"][0],
@@ -1007,6 +1057,223 @@ def run_edit(
     )
     glb_tgt.export(output_path)
 
+def visualize_attention_maps(attention_maps, coords, save_dir=None):
+    """Visualize attention maps for each layer and token.
+    
+    Args:
+        attention_maps: List of attention maps from run_edit_text
+        coords: Target coordinates [num_voxels, 4]
+        save_dir: Directory to save visualizations (optional)
+    """
+    os.makedirs(save_dir, exist_ok=True) if save_dir else None
+    
+    for layer_map in attention_maps:
+        layer = layer_map['layer']
+        
+        # Plot source and target attention side by side
+        for attn_type in ['source', 'target']:
+            attn_data = layer_map[attn_type]
+            token_list = attn_data['token_list']
+            token_attention = attn_data['token_attention'].numpy()
+            
+            # Create figure with subplots for each token
+            n_tokens = len(token_list)
+            n_cols = min(5, n_tokens)
+            n_rows = (n_tokens + n_cols - 1) // n_cols
+            fig, axes = plt.subplots(n_rows, n_cols, figsize=(4*n_cols, 4*n_rows))
+            fig.suptitle(f'Layer {layer} - {attn_type.capitalize()} Attention')
+            
+            # Plot attention for each token
+            for i, (token, ax) in enumerate(zip(token_list, axes.flat)):
+                # Get attention scores for this token
+                voxel_attention = token_attention[:, i]
+                
+                # Create 3D scatter plot
+                ax.scatter(coords[:, 1], coords[:, 2], c=voxel_attention, 
+                         cmap='viridis', alpha=0.6)
+                ax.set_title(f"Token: {token}")
+                ax.axis('equal')
+            
+            # Remove empty subplots
+            for ax in axes.flat[n_tokens:]:
+                ax.remove()
+                
+            plt.tight_layout()
+            
+            if save_dir:
+                plt.savefig(os.path.join(save_dir, f'layer_{layer}_{attn_type}_attention.png'))
+            plt.close()
+
+def get_attention_maps(ss_kv, t_latent, order, pos, layer, tokenizer, text):
+    """Extract attention maps for visualization.
+    
+    Args:
+        ss_kv: Dictionary containing attention maps
+        t_latent: Timestep
+        order: Order (1 or 2)
+        pos: Position (0 or 1)
+        layer: Layer index
+        tokenizer: CLIP tokenizer
+        text: Input text prompt
+        
+    Returns:
+        Dictionary containing:
+        - token_list: List of tokens from the text
+        - token_attention: Average attention scores per voxel for each token [num_voxels, num_tokens]
+        - attention_scores: Raw attention scores [num_heads, num_voxels, num_tokens]
+        - attention_probs: Attention probabilities [num_heads, num_voxels, num_tokens]
+    """
+    # Try to find exact match first
+    key = f"{t_latent}_{order}_{pos}_{layer}_attn_maps"
+    if key not in ss_kv:
+        # Try to find closest matching timestep
+        matching_keys = [k for k in ss_kv.keys() if f"_{order}_{pos}_{layer}_attn_maps" in k]
+        if not matching_keys:
+            return None
+        # Find closest timestep
+        timesteps = [float(k.split('_')[0]) for k in matching_keys]
+        closest_t = min(timesteps, key=lambda x: abs(float(t_latent) - x))
+        key = f"{closest_t}_{order}_{pos}_{layer}_attn_maps"
+        
+    # Get attention maps
+    attn_maps = ss_kv[key]
+    scores = attn_maps["scores"][0]  # [num_heads, num_voxels, num_tokens]
+    probs = attn_maps["probs"][0]    # [num_heads, num_voxels, num_tokens]
+    
+    # Get token list
+    tokens = tokenizer.encode(text)
+    token_list = tokenizer.convert_ids_to_tokens(tokens)
+    
+    # Average attention across heads
+    token_attention = probs.mean(dim=0)  # [num_voxels, num_tokens]
+    
+    return {
+        "token_list": token_list,
+        "token_attention": token_attention,
+        "attention_scores": scores,
+        "attention_probs": probs
+    }
+
+def run_edit_text(
+    pipeline,
+    render_dir,
+    src_prompt,
+    tgt_prompt,
+    output_path,
+    skip_step=0,
+    re_init=False,
+    cfg=[5.0, 6.0, 0.0, 0.0],
+):
+    ss_flow = pipeline.models["sparse_structure_flow_model"]
+    head_dim = ss_flow.blocks[0].cross_attn.to_kv.out_features // (2 * ss_flow.blocks[0].cross_attn.num_heads)
+    ss_flow.forward = MethodType(ss_flow_forward, ss_flow)
+    for block in ss_flow.blocks:
+        trsfmr_obj = block
+        trsfmr_obj.forward = MethodType(ss_trsfmr_forward, trsfmr_obj)
+        self_attn_obj = block.self_attn
+        self_attn_obj.forward = MethodType(ss_attn_forward, self_attn_obj)
+        cross_attn_obj = block.cross_attn
+        cross_attn_obj.forward = MethodType(ss_attn_forward, cross_attn_obj)
+
+    slat_flow = pipeline.models["slat_flow_model"]
+    slat_flow.forward = MethodType(slat_flow_forward, slat_flow)
+    for block in slat_flow.blocks:
+        trsfmr_obj = block
+        trsfmr_obj.forward = MethodType(slat_trsfmr_forward, trsfmr_obj)
+        self_attn_obj = block.self_attn
+        self_attn_obj.forward = MethodType(slat_attn_forward, self_attn_obj)
+        cross_attn_obj = block.cross_attn
+        cross_attn_obj.forward = MethodType(slat_attn_forward, cross_attn_obj)
+
+    cfg_strength_stage_1_inverse = cfg[0]
+    cfg_strength_stage_1_forward = cfg[1]
+    cfg_strength_stage_2_inverse = cfg[2]
+    cfg_strength_stage_2_forward = cfg[3]
+
+    # torch.manual_seed(0)
+
+    coords_src = ply_to_coords(os.path.join(render_dir, "voxels.ply"))
+    voxel_src = coords_to_voxel(coords_src)
+    slat_src = feats_to_slat(pipeline, os.path.join(render_dir, "features.npz"))
+    ply_delete_path = os.path.join(render_dir, "voxels_delete.ply")
+
+
+    cond_tgt = pipeline.get_cond([tgt_prompt])
+    cond_src = pipeline.get_cond([src_prompt])
+    # cond_tgt = pipeline.get_cond([pre_tgt]) 
+    # cond_src = pipeline.get_cond([pre_src])
+    coords_delete = ply_to_coords(ply_delete_path)
+    coords_preserve = coords_src[~torch.isin(coords_src, coords_delete).all(dim=1)]
+
+    voxel_mask, ss_latent_mask, ss_self_kv_mask, cross_kv_mask = ply_to_ss_mask(
+        coords_preserve,
+        use_text=True,
+                  source_text=src_prompt,
+          target_text=tgt_prompt,
+          tokenizer=pipeline.text_cond_model['tokenizer'],
+        head_dim=head_dim
+    )
+    noise, ss_latent, ss_kv = sample_sparse_structure_inverse(
+        pipeline, cond_src, voxel_src, cfg_strength_stage_1_inverse, skip_step
+    )
+    voxel_tgt = sample_sparse_structure_denoise(
+        pipeline,
+        cond_tgt,
+        noise,
+        voxel_src,
+        voxel_mask,
+        ss_latent,
+        ss_latent_mask,
+        ss_kv,
+        ss_self_kv_mask,
+        cross_kv_mask,
+        cfg_strength_stage_1_forward,
+        skip_step,
+        re_init,
+    )
+    coords_tgt = torch.argwhere(voxel_tgt > 0)[:, [0, 2, 3, 4]].int()
+
+    slat_self_kv_mask = ply_to_slat_mask(coords_tgt, coords_preserve)
+    slat_latent, slat_kv = sample_slat_inverse(
+        pipeline, cond_src, slat_src, coords_preserve, cfg_strength_stage_2_inverse
+    )
+    slat_tgt = sample_slat_denoise(
+        pipeline,
+        cond_tgt,
+        coords_tgt,
+        slat_src,
+        coords_preserve,
+        slat_latent,
+        slat_kv,
+        slat_self_kv_mask,
+        cross_kv_mask,
+        cfg_strength_stage_2_forward,
+    )
+    assets_tgt = pipeline.decode_slat(slat_tgt, ["gaussian", "mesh"])
+
+    torch.set_grad_enabled(True)
+    
+    video_dir = "./tmp/variant"
+    os.makedirs(video_dir, exist_ok=True)
+
+    # Render video for gaussian and mesh outputs
+    video_gs = render_utils.render_video(assets_tgt["gaussian"][0])["color"]
+    video_mesh = render_utils.render_video(assets_tgt["mesh"][0])["normal"]
+
+    # Concatenate gaussian and mesh frames side by side
+    video = [np.concatenate([frame_gs, frame_mesh], axis=1) for frame_gs, frame_mesh in zip(video_gs, video_mesh)]
+
+    # Save the video
+    video_path = os.path.join(video_dir, "edit_result_gs.mp4")
+    imageio.mimsave(video_path, video, fps=30)
+    print(f"Saved edit result video to {video_path}")
+    glb_tgt = postprocessing_utils.to_glb(
+        assets_tgt["gaussian"][0],
+        assets_tgt["mesh"][0],
+        simplify=0.95,
+        texture_size=1024,
+    )
+    glb_tgt.export(output_path)
 
 if __name__ == "__main__":
     pipeline = TrellisImageTo3DPipeline.from_pretrained("microsoft/TRELLIS-image-large")

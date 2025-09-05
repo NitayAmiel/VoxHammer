@@ -2,13 +2,14 @@ import argparse
 import os
 from typing import Optional
 
-from trellis.pipelines import TrellisImageTo3DPipeline
+from trellis.pipelines import TrellisImageTo3DPipeline, TrellisTextTo3DPipeline
 from voxhammer.bpy_render import render_3d_model
 from voxhammer.delete_region_voxel import process_delete_ply
-from voxhammer.edit_pipeline import run_edit
+from voxhammer.edit_pipeline import run_edit, run_edit_text, visualize_attention_maps
 from voxhammer.extract_feature import extract_features
 
-
+PROMPT_3D_EDIT = "a dog in a yellow raincoat with boots"
+PROMPT_SRC = "a dull in a yellow raincoat with boots"
 def run_3d_rendering(input_model_path: str, render_dir: str, **render_kwargs) -> dict:
     """
     Step 1: Render 3D model to generate multi-view images
@@ -132,7 +133,7 @@ def run_voxel_masking(mask_glb_path: str, render_dir: str, **mask_kwargs) -> dic
 
 
 def run_3d_editing(
-    pipeline, render_dir: str, image_dir: str, output_path: str, **edit_kwargs
+    pipeline, render_dir: str, image_dir: str, output_path: str, use_text: bool = False, src_prompt: str = PROMPT_SRC, tgt_prompt: str = PROMPT_3D_EDIT, **edit_kwargs
 ) -> dict:
     """
     Step 4: Perform 3D editing using TRELLIS pipeline
@@ -141,6 +142,9 @@ def run_3d_editing(
         render_dir: Directory containing render outputs and features
         image_dir: Directory containing source, target, and mask images
         output_path: Path for final output GLB file
+        use_text: Whether to use text for editing
+        src_prompt: Source prompt for text editing
+        tgt_prompt: Target prompt for text editing
         **edit_kwargs: Additional editing parameters
 
     Returns:
@@ -165,18 +169,31 @@ def run_3d_editing(
     required_files = [
         os.path.join(render_dir, "voxels.ply"),
         os.path.join(render_dir, "features.npz"),
-        os.path.join(render_dir, "voxels_delete.ply"),
-        os.path.join(image_dir, "2d_render.png"),
-        os.path.join(image_dir, "2d_edit.png"),
-        os.path.join(image_dir, "2d_mask.png"),
+        os.path.join(render_dir, "voxels_delete.ply")
     ]
+    if not use_text:
+        required_files.append(os.path.join(image_dir, "2d_render.png"))
+        required_files.append(os.path.join(image_dir, "2d_edit.png"))
+        required_files.append(os.path.join(image_dir, "2d_mask.png"))
 
     for file_path in required_files:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Required file not found: {file_path}")
+    if use_text and not src_prompt or not tgt_prompt:
+        raise ValueError("Source and target prompts are required for text editing")
 
     try:
-        run_edit(pipeline, render_dir, image_dir, output_path, **default_params)
+        if use_text:
+            results = run_edit_text(pipeline, render_dir, src_prompt, tgt_prompt, output_path, **default_params)
+        else:
+            results = run_edit(pipeline, render_dir, image_dir, output_path, **default_params)
+        # Create visualizations
+        save_dir = "./attention_viz"
+        visualize_attention_maps(
+            attention_maps=results['attention_maps'],
+            coords=results['coords_tgt'],
+            save_dir=save_dir
+        )
         print(f"3D editing completed successfully!")
         print(f"Final result saved to: {output_path}")
         return {"output_path": output_path}
@@ -192,6 +209,9 @@ def run_complete_pipeline(
     render_dir: str,
     image_dir: str,
     output_path: str,
+    use_text: bool = False,
+    src_prompt: str = PROMPT_SRC,
+    tgt_prompt: str = PROMPT_3D_EDIT,
     render_params: Optional[dict] = None,
     feature_params: Optional[dict] = None,
     mask_params: Optional[dict] = None,
@@ -247,7 +267,7 @@ def run_complete_pipeline(
 
     # Step 4: 3D Editing
     edit_results = run_3d_editing(
-        pipeline, render_dir, image_dir, output_path, **(edit_params or {})
+        pipeline, render_dir, image_dir, output_path, use_text, src_prompt, tgt_prompt, **(edit_params or {})
     )
     results["editing"] = edit_results
 
@@ -368,6 +388,9 @@ def main():
             render_dir=args.render_dir,
             image_dir=args.image_dir,
             output_path=args.output_path,
+            use_text=args.use_text,
+            src_prompt=args.src_prompt,
+            tgt_prompt=args.tgt_prompt,
             render_params=render_params,
             feature_params=feature_params,
             mask_params=mask_params,
@@ -394,9 +417,15 @@ if __name__ == "__main__":
         default=None,
         help="Skip rendering and use existing render directory",
     )
+    parser.add_argument("--use_text", default=False, action="store_true", help="Use text for editing")
+    parser.add_argument("--src_prompt", type=str, default=PROMPT_SRC, help="Source prompt for text editing")
+    parser.add_argument("--tgt_prompt", type=str, default=PROMPT_3D_EDIT, help="Target prompt for text editing")
     args = parser.parse_args()
 
-    pipeline = TrellisImageTo3DPipeline.from_pretrained("microsoft/TRELLIS-image-large")
+    if args.use_text:
+        pipeline = TrellisTextTo3DPipeline.from_pretrained("microsoft/TRELLIS-text-large")
+    else:
+        pipeline = TrellisImageTo3DPipeline.from_pretrained("microsoft/TRELLIS-image-large")
     pipeline.cuda()
     run_complete_pipeline(
         pipeline=pipeline,
@@ -409,6 +438,9 @@ if __name__ == "__main__":
         ),
         image_dir=args.image_dir,
         output_path=os.path.join(args.output_dir, "output.glb"),
+        use_text=args.use_text,
+        src_prompt=args.src_prompt,
+        tgt_prompt=args.tgt_prompt,
     )
 
     print(
