@@ -211,3 +211,5 @@ __marimo__/
 .gradio/
 gradio_cache/
 outputs/
+tmp/
+prompt-to-prompt/

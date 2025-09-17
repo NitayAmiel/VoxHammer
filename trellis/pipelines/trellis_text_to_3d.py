@@ -7,6 +7,9 @@ import open3d as o3d
 from .base import Pipeline
 from . import samplers
 from ..modules import sparse as sp
+import pdb
+from .. import attn_globals
+
 
 
 class TrellisTextTo3DPipeline(Pipeline):
@@ -106,7 +109,106 @@ class TrellisTextTo3DPipeline(Pipeline):
             'cond': cond,
             'neg_cond': neg_cond,
         }
+    def generate_and_save_attention(
+        self,
+        prompt_generation: str,
+        prompt_attn: str,
+        num_samples: int = 1,
+        sampler_params: dict = {},
+        seed: int = 42,
+        percentage_of_layers_to_store: float = 1.0,
+    ) -> list:
+        """
+        Generate and save attention maps.
 
+        Args:
+            prompt_generation (str): The text prompt for generation.
+            num_samples (int): The number of samples to generate.
+            sampler_params (dict): Additional parameters for the sampler.
+            seed (int): The random seed.
+            percentage_of_layers_to_store (float): The percentage of layers to store.
+
+        Returns:
+            dict: The generated attention maps.
+                attn (torch.Tensor): The attention maps.
+                output (dict): The generated output.
+                coords (torch.Tensor): The coordinates of the generated sparse structure.
+        """
+        torch.manual_seed(seed)
+        attn_globals.ATTN_COLLECT.set_store_attn(True)
+        attn_globals.ATTN_COLLECT.set_percentage_of_layers_to_store(percentage_of_layers_to_store)
+        cond = self.get_cond([prompt_generation])
+        attn_cond = self.get_cond([prompt_attn])
+        formats = ['mesh','gaussian']
+        empty_cond = self.get_cond(['blank'])
+        flow_model = self.models['sparse_structure_flow_model']
+        reso = flow_model.resolution
+        
+        #generate the sparse structure
+        noise = torch.randn(num_samples, flow_model.in_channels, reso, reso, reso).to(self.device)
+        sampler_params = {**self.sparse_structure_sampler_params, **sampler_params}
+        z_s_generation = self.sparse_structure_sampler.sample(
+            flow_model, noise, **cond, **sampler_params, verbose=True
+        ).samples
+
+        # reset the attention collector
+        attn_globals.ATTN_COLLECT.set_store_attn(False)
+        attn_globals.ATTN_COLLECT.set_percentage_of_layers_to_store(1.0)
+        print(f" number of layers: {attn_globals.ATTN_COLLECT.get_num_of_layers()}")
+
+        # sample SLAT with the empty condition
+        decoder = self.models['sparse_structure_decoder']
+        coords = torch.argwhere(decoder(z_s_generation)>0)[:, [0, 2, 3, 4]].int()
+        slat = self.sample_slat(empty_cond, coords, {})
+        output = self.decode_slat(slat, formats)
+        
+        return {"attn": attn_globals.ATTN_COLLECT.get(), "output": output, "coords": coords}
+
+    
+    def show_attn(self, attn: torch.Tensor, threshold: float = 0.5, original_coords: torch.Tensor = None, prompt_for_attn_slat: str = "blank", add_strength: bool = False):
+        """
+        Show the attention maps.
+
+        Args:
+            attn (torch.Tensor): The attention maps.
+            threshold (float): The threshold for the attention map values.
+            original_coords (torch.Tensor): The coordinates of the original sparse structure. [L, 4] columns: [batch, x, y, z]
+            prompt_for_attn_slat (str): The text prompt for the attention SLAT.
+            add_strength (bool): Whether to add the strength to the coordinates. [L, 5] columns: [batch, x, y, z, strength]
+
+        Returns:
+            dict: The generated output.
+                output (dict): The generated output.
+                coords (torch.Tensor): The coordinates of the generated sparse structure.
+        """
+        idx = original_coords[:, 1:4].long().to(attn.device)          # shape: (L, 3)
+        empty_cond = self.get_cond([prompt_for_attn_slat])
+        formats = ['mesh','gaussian']
+        # (optional) validate bounds to avoid indexing errors
+        if torch.any((idx < 0) | (idx >= 64)):
+            raise ValueError("Some indices in attn[:,1:4] are out of [0, 63].")
+
+        # Gather values from A at those coordinates
+        vals = attn[idx[:, 0], idx[:, 1], idx[:, 2]]    # shape: (L,)
+
+        # Build mask and filter rows
+        mask = vals > threshold                              # shape: (L,)
+        new_coords = original_coords[mask]
+        if add_strength:
+            # For each row in new_coords, get attn at [x, y, z] where x=new_coords[i,1], y=new_coords[i,2], z=new_coords[i,3]
+            # new_coords shape: (N, 4), columns: [batch, x, y, z]
+            x = new_coords[:, 1].cpu()
+            y = new_coords[:, 2].cpu()
+            z = new_coords[:, 3].cpu()
+            # Gather strengths
+            strengths = attn[x, y, z]
+            # Convert back to tensor on same device as new_coords
+            strengths = torch.from_numpy(strengths).to(new_coords.device)
+            # Add as a new column
+            new_coords_with_strength = torch.cat([new_coords, strengths.unsqueeze(1)], dim=1)
+        slat = self.sample_slat(empty_cond, new_coords, {})
+        return self.decode_slat(slat, formats), new_coords_with_strength
+        
     def sample_sparse_structure(
         self,
         cond: dict,

@@ -1,11 +1,12 @@
 import argparse
 import os
-from typing import Optional
+from typing import Optional, Tuple
+import torch
 
 from trellis.pipelines import TrellisImageTo3DPipeline, TrellisTextTo3DPipeline
 from voxhammer.bpy_render import render_3d_model
 from voxhammer.delete_region_voxel import process_delete_ply
-from voxhammer.edit_pipeline import run_edit, run_edit_text, visualize_attention_maps
+from voxhammer.edit_pipeline import run_edit, run_edit_text
 from voxhammer.extract_feature import extract_features
 
 PROMPT_3D_EDIT = "a dog in a yellow raincoat with boots"
@@ -132,6 +133,45 @@ def run_voxel_masking(mask_glb_path: str, render_dir: str, **mask_kwargs) -> dic
     return {"mask_path": voxels_delete_path}
 
 
+def run_single_ss_step(
+    pipeline,
+    noise_input: torch.Tensor,
+    tgt_prompt: str,
+    t_step: int,
+    order: Optional[int] = None,
+    pos: Optional[int] = None,
+) -> tuple[torch.Tensor, dict]:
+    """
+    Run a single step of the Sparse Structure (SS) sampling process and save attention maps.
+
+    Args:
+        pipeline: The TRELLIS pipeline instance
+        noise_input: Input noise tensor for sampling (should match model's expected shape)
+        tgt_prompt: Target prompt for conditioning
+        t_step: Current timestep for sampling
+        order: Optional order parameter for attention saving
+        pos: Optional position parameter for attention saving
+
+    Returns:
+        Tuple containing:
+        - Output tensor from the sampling step
+        - Dictionary of saved attention maps
+    """
+    from voxhammer.edit_pipeline import run_once_and_save_attn
+    
+    run_feature_extraction(render_dir)
+    # Run one step and collect outputs
+    output = run_once_and_save_attn(
+        pipeline=pipeline,
+        noise_input=noise_input,
+        tgt_prompt=tgt_prompt,
+        t_step=t_step,
+        order=order,
+        pos=pos
+    )
+    
+    return output
+
 def run_3d_editing(
     pipeline, render_dir: str, image_dir: str, output_path: str, use_text: bool = False, src_prompt: str = PROMPT_SRC, tgt_prompt: str = PROMPT_3D_EDIT, **edit_kwargs
 ) -> dict:
@@ -186,17 +226,7 @@ def run_3d_editing(
         if use_text:
             results = run_edit_text(pipeline, render_dir, src_prompt, tgt_prompt, output_path, **default_params)
         else:
-            results = run_edit(pipeline, render_dir, image_dir, output_path, **default_params)
-        # Create visualizations
-        save_dir = "./attention_viz"
-        visualize_attention_maps(
-            attention_maps=results['attention_maps'],
-            coords=results['coords_tgt'],
-            save_dir=save_dir
-        )
-        print(f"3D editing completed successfully!")
-        print(f"Final result saved to: {output_path}")
-        return {"output_path": output_path}
+            results = run_edit(pipeline, render_dir, image_dir, output_path, **default_params)        
     except Exception as e:
         print(f"3D editing failed: {e}")
         raise

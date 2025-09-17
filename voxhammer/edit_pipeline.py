@@ -1,6 +1,4 @@
 import os
-import sys
-import math
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -9,7 +7,6 @@ os.environ["SPCONV_ALGO"] = "native"
 
 from types import MethodType
 from typing import *
-import pdb
 
 import imageio
 from trellis.utils import render_utils
@@ -27,7 +24,6 @@ from trellis.modules.spatial import patchify, unpatchify
 from trellis.pipelines import TrellisImageTo3DPipeline, TrellisTextTo3DPipeline
 from trellis.pipelines.samplers.flow_euler import FlowEulerGuidanceIntervalSampler
 from trellis.utils import postprocessing_utils
-
 
 def ply_to_coords(ply_path):
     position = utils3d.io.read_ply(ply_path)[0]
@@ -267,7 +263,6 @@ def ss_attn_forward(
     h = h.reshape(B, L, -1)
     h = self.to_out(h)
     return h
-
 
 def ss_trsfmr_forward(
     self,
@@ -1057,102 +1052,60 @@ def run_edit(
     )
     glb_tgt.export(output_path)
 
-def visualize_attention_maps(attention_maps, coords, save_dir=None):
-    """Visualize attention maps for each layer and token.
-    
-    Args:
-        attention_maps: List of attention maps from run_edit_text
-        coords: Target coordinates [num_voxels, 4]
-        save_dir: Directory to save visualizations (optional)
-    """
-    os.makedirs(save_dir, exist_ok=True) if save_dir else None
-    
-    for layer_map in attention_maps:
-        layer = layer_map['layer']
-        
-        # Plot source and target attention side by side
-        for attn_type in ['source', 'target']:
-            attn_data = layer_map[attn_type]
-            token_list = attn_data['token_list']
-            token_attention = attn_data['token_attention'].numpy()
-            
-            # Create figure with subplots for each token
-            n_tokens = len(token_list)
-            n_cols = min(5, n_tokens)
-            n_rows = (n_tokens + n_cols - 1) // n_cols
-            fig, axes = plt.subplots(n_rows, n_cols, figsize=(4*n_cols, 4*n_rows))
-            fig.suptitle(f'Layer {layer} - {attn_type.capitalize()} Attention')
-            
-            # Plot attention for each token
-            for i, (token, ax) in enumerate(zip(token_list, axes.flat)):
-                # Get attention scores for this token
-                voxel_attention = token_attention[:, i]
-                
-                # Create 3D scatter plot
-                ax.scatter(coords[:, 1], coords[:, 2], c=voxel_attention, 
-                         cmap='viridis', alpha=0.6)
-                ax.set_title(f"Token: {token}")
-                ax.axis('equal')
-            
-            # Remove empty subplots
-            for ax in axes.flat[n_tokens:]:
-                ax.remove()
-                
-            plt.tight_layout()
-            
-            if save_dir:
-                plt.savefig(os.path.join(save_dir, f'layer_{layer}_{attn_type}_attention.png'))
-            plt.close()
 
-def get_attention_maps(ss_kv, t_latent, order, pos, layer, tokenizer, text):
-    """Extract attention maps for visualization.
+def run_once_and_save_attn(
+    pipeline,
+    input_dir: str,  # Directory containing voxels.ply and features.npz
+    tgt_prompt: str,  # Target prompt for conditioning
+    t_step: int,      # Current timestep
+    order: int = None,  # Order parameter for attention saving
+    pos: int = None,    # Position parameter for attention saving
+):
+    """
+    Run one step of SS sampling and save attention maps.
     
     Args:
-        ss_kv: Dictionary containing attention maps
-        t_latent: Timestep
-        order: Order (1 or 2)
-        pos: Position (0 or 1)
-        layer: Layer index
-        tokenizer: CLIP tokenizer
-        text: Input text prompt
-        
+        pipeline: The TRELLIS pipeline
+        input_dir: Directory containing input files (voxels.ply, features.npz)
+        tgt_prompt: Target prompt for conditioning
+        t_step: Current timestep
+        order: Order parameter for attention saving
+        pos: Position parameter for attention saving
+    
     Returns:
-        Dictionary containing:
-        - token_list: List of tokens from the text
-        - token_attention: Average attention scores per voxel for each token [num_voxels, num_tokens]
-        - attention_scores: Raw attention scores [num_heads, num_voxels, num_tokens]
-        - attention_probs: Attention probabilities [num_heads, num_voxels, num_tokens]
+        Tuple of (output tensor, attention maps)
     """
-    # Try to find exact match first
-    key = f"{t_latent}_{order}_{pos}_{layer}_attn_maps"
-    if key not in ss_kv:
-        # Try to find closest matching timestep
-        matching_keys = [k for k in ss_kv.keys() if f"_{order}_{pos}_{layer}_attn_maps" in k]
-        if not matching_keys:
-            return None
-        # Find closest timestep
-        timesteps = [float(k.split('_')[0]) for k in matching_keys]
-        closest_t = min(timesteps, key=lambda x: abs(float(t_latent) - x))
-        key = f"{closest_t}_{order}_{pos}_{layer}_attn_maps"
-        
-    # Get attention maps
-    attn_maps = ss_kv[key]
-    scores = attn_maps["scores"][0]  # [num_heads, num_voxels, num_tokens]
-    probs = attn_maps["probs"][0]    # [num_heads, num_voxels, num_tokens]
+    # Process input files
+    coords_src = ply_to_coords(os.path.join(input_dir, "voxels.ply"))
+    voxel_src = coords_to_voxel(coords_src)
+
+    # Set up SS flow model with attention saving
+    ss_flow = pipeline.models["sparse_structure_flow_model"]
+    ss_flow.forward = MethodType(ss_flow_forward, ss_flow)
+    for block in ss_flow.blocks:
+        trsfmr_obj = block
+        trsfmr_obj.forward = MethodType(ss_trsfmr_forward, trsfmr_obj)
+        self_attn_obj = block.self_attn
+        self_attn_obj.forward = MethodType(ss_attn_forward, self_attn_obj)
+        cross_attn_obj = block.cross_attn
+        cross_attn_obj.forward = MethodType(ss_attn_forward, cross_attn_obj)
+
+    # Get conditioning from prompt
+    cond_tgt = pipeline.get_cond([tgt_prompt])
     
-    # Get token list
-    tokens = tokenizer.encode(text)
-    token_list = tokenizer.convert_ids_to_tokens(tokens)
+    # Run one step of sampling
+    with torch.no_grad():
+        output = ss_flow(
+            voxel_src,  # Using voxelized input
+            t=t_step,
+            context=cond_tgt,
+            t_latent=t_step,
+            order=order,
+            pos=pos
+        )
     
-    # Average attention across heads
-    token_attention = probs.mean(dim=0)  # [num_voxels, num_tokens]
-    
-    return {
-        "token_list": token_list,
-        "token_attention": token_attention,
-        "attention_scores": scores,
-        "attention_probs": probs
-    }
+
+
 
 def run_edit_text(
     pipeline,

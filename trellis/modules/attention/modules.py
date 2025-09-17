@@ -2,7 +2,10 @@ from typing import *
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 from .full_attn import scaled_dot_product_attention
+from ... import attn_globals
+import pdb
 
 
 class MultiHeadRMSNorm(nn.Module):
@@ -134,6 +137,19 @@ class MultiHeadAttention(nn.Module):
             kv = self.to_kv(context)
             q = q.reshape(B, L, self.num_heads, -1)
             kv = kv.reshape(B, Lkv, 2, self.num_heads, -1)
+            if attn_globals.ATTN_COLLECT.get_store_attn() and self._type == "cross":
+                k, _v_tmp = kv.unbind(dim=2)
+                if self.qk_rms_norm:
+                    print("Storing cross-attention head-mean in qk_rms_norm")
+                    q = self.q_rms_norm(q)
+                    k = self.k_rms_norm(k)
+                scale = 1.0 / math.sqrt(q.shape[-1])
+                q32 = (q * scale).to(torch.float32)
+                k32 = k.to(torch.float32)
+                scores = torch.einsum('blhc,bkhc->bhlk', q32, k32)
+                scores = scores - scores.max(dim=-1, keepdim=True).values
+                attn = torch.softmax(scores, dim=-1).detach().to('cpu')  # [B,L,Lk]
+                attn_globals.ATTN_COLLECT.add_attn_average(attn)
             if self.qk_rms_norm:
                 q = self.q_rms_norm(q)
                 k, v = kv.unbind(dim=2)
