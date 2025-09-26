@@ -1,5 +1,5 @@
 from typing import *
-
+from ... import attn_globals
 
 class GuidanceIntervalSamplerMixin:
     """
@@ -9,7 +9,9 @@ class GuidanceIntervalSamplerMixin:
     def _inference_model(self, model, x_t, t, cond, neg_cond, cfg_strength, cfg_interval, **kwargs):
         if cfg_interval[0] <= t <= cfg_interval[1]:
             pred = super()._inference_model(model, x_t, t, cond, **kwargs)
+            state =attn_globals.ATTN_COLLECT.zero_all_flags()
             neg_pred = super()._inference_model(model, x_t, t, neg_cond, **kwargs)
+            attn_globals.ATTN_COLLECT.set_all_flags(state)
             return (1 + cfg_strength) * pred - cfg_strength * neg_pred
         else:
             return super()._inference_model(model, x_t, t, cond, **kwargs)

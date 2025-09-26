@@ -122,6 +122,18 @@ class MultiHeadAttention(nn.Module):
                 q, k = self.rope(q, k, indices)
                 qkv = torch.stack([q, k, v], dim=2)
             if self.attn_mode == "full":
+                attn_globals.ATTN_COLLECT.update_layer_idx(on_self = True)
+                q, k, v = qkv.unbind(dim=2)
+                if attn_globals.ATTN_COLLECT.get_store_attn_each_layer(on_self = True):
+                    attn_globals.ATTN_COLLECT.add_attn_average(attn_globals.compute_attention_for_injection_from_k_q(k, q))
+                elif attn_globals.ATTN_COLLECT.get_inject_attn_flag(on_self = True):
+                    # h = attn_globals.ATTN_COLLECT.apply_mixed_attention(attn, _v_tmp)
+                    attn_new = attn_globals.compute_attention_for_injection_from_k_q(k, q)
+                    attn_combined = attn_globals.ATTN_COLLECT.combine_attn(attn_new)
+                    h = attn_globals.scaled_dot_product_attention_for_injection(query_= None, key_= None, value_= v, attn_weight_param= attn_combined)
+                    h = h.reshape(B, L, -1)
+                    h = self.to_out(h)
+                    return h
                 if self.qk_rms_norm:
                     q, k, v = qkv.unbind(dim=2)
                     q = self.q_rms_norm(q)
@@ -137,19 +149,22 @@ class MultiHeadAttention(nn.Module):
             kv = self.to_kv(context)
             q = q.reshape(B, L, self.num_heads, -1)
             kv = kv.reshape(B, Lkv, 2, self.num_heads, -1)
-            if attn_globals.ATTN_COLLECT.get_store_attn() and self._type == "cross":
-                k, _v_tmp = kv.unbind(dim=2)
-                if self.qk_rms_norm:
-                    print("Storing cross-attention head-mean in qk_rms_norm")
-                    q = self.q_rms_norm(q)
-                    k = self.k_rms_norm(k)
-                scale = 1.0 / math.sqrt(q.shape[-1])
-                q32 = (q * scale).to(torch.float32)
-                k32 = k.to(torch.float32)
-                scores = torch.einsum('blhc,bkhc->bhlk', q32, k32)
-                scores = scores - scores.max(dim=-1, keepdim=True).values
-                attn = torch.softmax(scores, dim=-1).detach().to('cpu')  # [B,L,Lk]
-                attn_globals.ATTN_COLLECT.add_attn_average(attn)
+            if self._type == "cross":
+                attn_globals.ATTN_COLLECT.update_layer_idx()
+                k, v = kv.unbind(dim=2)
+                if attn_globals.ATTN_COLLECT.get_store_attn():
+                    attn_globals.ATTN_COLLECT.add_attn_average_from_k_q(k, q)
+                elif attn_globals.ATTN_COLLECT.get_store_attn_each_layer():
+                    attn_globals.ATTN_COLLECT.add_attn_average(attn_globals.compute_attention_for_injection_from_k_q(k, q))
+                elif attn_globals.ATTN_COLLECT.get_inject_attn_flag():
+                    # h = attn_globals.ATTN_COLLECT.apply_mixed_attention(attn, _v_tmp)
+                    attn_new = attn_globals.compute_attention_for_injection_from_k_q(k, q)
+                    attn_globals.ATTN_COLLECT.add_attn_average(attn_new)
+                    attn_combined = attn_globals.ATTN_COLLECT.combine_attn(attn_new)
+                    h = attn_globals.scaled_dot_product_attention_for_injection(query_= None, key_= None, value_= v, attn_weight_param= attn_combined)
+                    h = h.reshape(B, L, -1)
+                    h = self.to_out(h)
+                    return h
             if self.qk_rms_norm:
                 q = self.q_rms_norm(q)
                 k, v = kv.unbind(dim=2)

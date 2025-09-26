@@ -18,12 +18,15 @@ import torchvision.transforms as transforms
 import utils3d
 from PIL import Image
 from tqdm import tqdm
+import pdb
 
 import trellis.modules.sparse as sp
 from trellis.modules.spatial import patchify, unpatchify
 from trellis.pipelines import TrellisImageTo3DPipeline, TrellisTextTo3DPipeline
 from trellis.pipelines.samplers.flow_euler import FlowEulerGuidanceIntervalSampler
 from trellis.utils import postprocessing_utils
+from trellis import attn_globals
+from visualize_attention import visualize_attention_from_global_attn
 
 def ply_to_coords(ply_path):
     position = utils3d.io.read_ply(ply_path)[0]
@@ -249,6 +252,8 @@ def ss_attn_forward(
     if kv_mask is None:
         ss_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_k"] = k.cpu()
         ss_kv[f"{t_latent}_{order}_{pos}_{layer}_{self._type}_v"] = v.cpu()
+        if self._type == "cross":
+            attn_globals.ATTN_COLLECT.add_attn_from_k_q(k.permute(0, 2, 1, 3), q.permute(0, 2, 1, 3))
     else:
         k = k * kv_mask + ss_kv[
             f"{t_latent}_{order}_{pos}_{layer}_{self._type}_k"
@@ -779,7 +784,6 @@ def sample_sparse_structure_inverse(
         cfg_strength = pipeline.sparse_structure_sampler_params["cfg_strength"]
     else:
         cfg_strength = cfg_strength_stage_1_inverse
-
     noise, ss_latent, ss_kv = sparse_structure_sampler.sample(
         flow_model, stage, z_s, cond_src, cfg_strength, skip_step=skip_step
     )
@@ -973,6 +977,7 @@ def run_edit(
 
     coords_src = ply_to_coords(os.path.join(render_dir, "voxels.ply"))
     voxel_src = coords_to_voxel(coords_src)
+    pdb.set_trace()
     slat_src = feats_to_slat(pipeline, os.path.join(render_dir, "features.npz"))
     img_src_path = os.path.join(image_dir, "2d_render.png")
     img_tgt_path = os.path.join(image_dir, "2d_edit.png")
@@ -990,9 +995,11 @@ def run_edit(
     voxel_mask, ss_latent_mask, ss_self_kv_mask, cross_kv_mask = ply_to_ss_mask(
         coords_preserve, pre_mask, head_dim=head_dim
     )
+    attn_globals.ATTN_COLLECT.set_store_attn(True)
     noise, ss_latent, ss_kv = sample_sparse_structure_inverse(
         pipeline, cond_src, voxel_src, cfg_strength_stage_1_inverse, skip_step
     )
+    attn_globals.ATTN_COLLECT.set_store_attn(False)
     voxel_tgt = sample_sparse_structure_denoise(
         pipeline,
         cond_tgt,
@@ -1014,6 +1021,7 @@ def run_edit(
     slat_latent, slat_kv = sample_slat_inverse(
         pipeline, cond_src, slat_src, coords_preserve, cfg_strength_stage_2_inverse
     )
+    
     slat_tgt = sample_slat_denoise(
         pipeline,
         cond_tgt,
@@ -1166,9 +1174,13 @@ def run_edit_text(
           tokenizer=pipeline.text_cond_model['tokenizer'],
         head_dim=head_dim
     )
+    attn_globals.ATTN_COLLECT.set_store_attn(True)
     noise, ss_latent, ss_kv = sample_sparse_structure_inverse(
         pipeline, cond_src, voxel_src, cfg_strength_stage_1_inverse, skip_step
     )
+    attn_globals.ATTN_COLLECT.set_store_attn(False)
+    pdb.set_trace()
+    visualize_attention_from_global_attn(pipeline, torch.cat((torch.zeros(coords_src.size(0), 1, device=coords_src.device), coords_src), dim=1), prompt_attn=src_prompt)
     voxel_tgt = sample_sparse_structure_denoise(
         pipeline,
         cond_tgt,

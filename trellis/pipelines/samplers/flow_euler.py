@@ -3,9 +3,11 @@ import torch
 import numpy as np
 from tqdm import tqdm
 from easydict import EasyDict as edict
+from trellis import attn_globals
 from .base import Sampler
 from .classifier_free_guidance_mixin import ClassifierFreeGuidanceSamplerMixin
 from .guidance_interval_mixin import GuidanceIntervalSamplerMixin
+import pdb
 
 
 class FlowEulerSampler(Sampler):
@@ -106,6 +108,8 @@ class FlowEulerSampler(Sampler):
             - 'pred_x_0': a list of prediction of x_0.
         """
         sample = noise
+        sample_old = noise
+        cond_old = attn_globals.ATTN_COLLECT.get_cond_old()
         t_seq = np.linspace(1, 0, steps + 1)
         t_seq = rescale_t * t_seq / (1 + (rescale_t - 1) * t_seq)
         t_pairs = list((t_seq[i], t_seq[i + 1]) for i in range(steps))
@@ -113,6 +117,19 @@ class FlowEulerSampler(Sampler):
         for t, t_prev in tqdm(t_pairs, desc="Sampling", disable=not verbose):
             out = self.sample_once(model, sample, t, t_prev, cond, **kwargs)
             sample = out.pred_x_prev
+            if cond_old is not None:
+                kwargs_old = kwargs.copy()
+                kwargs_old['neg_cond'] = cond_old['neg_cond']
+                attn_globals.ATTN_COLLECT.set_inject_attn(False, reset_layer_idx=False)
+                out_old = self.sample_once(model, sample_old, t, t_prev, cond_old['cond'], **kwargs_old)
+                sample_old = out_old.pred_x_prev
+                attn_globals.ATTN_COLLECT.set_inject_attn(True, reset_layer_idx=False)
+                # pdb.set_trace()
+                mask = attn_globals.ATTN_COLLECT.update_mask_and_create_sample().reshape(sample.shape[-1], sample.shape[-1], -1).unsqueeze(0).unsqueeze(0).to(sample.device)
+                print(f"mask true: {mask.sum()} out of {mask.numel()}")
+                if type(sample) == torch.Tensor and attn_globals.ATTN_COLLECT.should_belnd_latents(attn_globals.ATTN_COLLECT.layer_idx):
+                    sample = torch.where(mask, sample, out_old.pred_x_prev)
+
             ret.pred_x_t.append(out.pred_x_prev)
             ret.pred_x_0.append(out.pred_x_0)
         ret.samples = sample

@@ -18,6 +18,7 @@ from trellis.models.sparse_structure_vae import UpsampleBlock3d
 from trellis.models.structured_latent_vae.decoder_mesh import SparseSubdivideBlock3d
 import torch.nn as nn
 from visualizecoords import render_voxel_video_from_L4, render_voxel_set_images
+import pdb
 
 def cat_attn_to_coords(attn, coords):
     idx = coords[:, 1:4].long().to(attn.device)          # shape: (L, 3)
@@ -176,38 +177,115 @@ def find_token_columns_for_prompt(pipeline, prompt: str, target_word: str, max_l
     # Remove duplicates while preserving order
     return list(dict.fromkeys(matched_cols))
 
-prompt_generation = "a table with a lamp and a book."
-prompt_attn = prompt_generation
-attn_word = "book"
-THRESHOLD = 0.8
-upsample_mode = "nearest"
-outputs = pipeline.generate_and_save_attention(
-    prompt_generation=prompt_generation,
-    prompt_attn=prompt_attn,
-    percentage_of_layers_to_store=1,
-)
+def visualize_attention(pipeline,
+    prompt_generation ="a table with a lamp and a book.",
+    prompt_attn ="a table with a lamp and a book.",
+    attn_word ="book",
+    upsample_mode="nearest",
+    threshold=0.8):
+    outputs = pipeline.generate_and_save_attention(
+        prompt_generation=prompt_generation,
+        prompt_attn=prompt_attn,
+        percentage_of_layers_to_store=1,
+    )
 
-attn = outputs['attn']
-output = outputs['output']
-coords = outputs['coords']
-# render the original structure
-video = render_utils.render_video(output['gaussian'][0])['color']
-imageio.mimsave("tmp/attn_gs_org.mp4", video, fps=30)
-video = render_utils.render_video(output['mesh'][0])['normal']
-imageio.mimsave("tmp/attn_mesh_org.mp4", video, fps=30)
+    attn = outputs['attn']
+    output = outputs['output']
+    coords = outputs['coords']
+    # render the original structure
+    video = render_utils.render_video(output['gaussian'][0])['color']
+    imageio.mimsave("tmp/attn_gs_org.mp4", video, fps=30)
+    video = render_utils.render_video(output['mesh'][0])['normal']
+    imageio.mimsave("tmp/attn_mesh_org.mp4", video, fps=30)
 
-# upsample and gather the relevant columns
-attn_processed = process_attn(attn, prompt_attn, attn_word, upsample_mode)
-assert len(attn_processed.shape) == 4
-for i in range(attn_processed.shape[0]):
-    # take tjhe relevant attention values, new coords now is [L,5] columns: [batch, x, y, z, attn]
-    output_i, new_coords = pipeline.show_attn(attn_processed[i], threshold=THRESHOLD, original_coords=coords, add_strength=True)
-    # output_path = render_voxel_video_from_L4(new_coords, out_path=f"tmp/attn_voxels_{attn_word}_{i}.mp4", use_gpu=True)
-    # print(f" saved voxel video to {output_path}")
-    render_voxel_set_images(is_gradually=True, voxels_L4=cat_attn_to_coords(torch.from_numpy(attn_processed[i]), coords.cpu())[:, 1:5],out_dir=f"tmp/attn_voxels_{attn_word}_{i}")
-    print(f"saved voxel set images to tmp/attn_voxels_{attn_word}_{i}")
-    video = render_utils.render_video(output_i['gaussian'][0])['color']
-    imageio.mimsave(f"tmp/attn_gs_{attn_word}_{i}.mp4", video, fps=30)
-    video = render_utils.render_video(output_i['mesh'][0])['normal']
-    imageio.mimsave(f"tmp/attn_mesh_{attn_word}_{i}.mp4", video, fps=30)
+    # upsample and gather the relevant columns
+    attn_processed = process_attn(attn, prompt_attn, attn_word, upsample_mode)
+    assert len(attn_processed.shape) == 4
+    for i in range(attn_processed.shape[0]):
+        # take tjhe relevant attention values, new coords now is [L,5] columns: [batch, x, y, z, attn]
+        output_i, new_coords = pipeline.show_attn(attn_processed[i], threshold=threshold, original_coords=coords, add_strength=True)
+        # output_path = render_voxel_video_from_L4(new_coords, out_path=f"tmp/attn_voxels_{attn_word}_{i}.mp4", use_gpu=True)
+        # print(f" saved voxel video to {output_path}")
+        render_voxel_set_images(is_gradually=True, voxels_L4=cat_attn_to_coords(torch.from_numpy(attn_processed[i]), coords.cpu())[:, 1:5],out_dir=f"tmp/attn_voxels_{attn_word}_{i}")
+        print(f"saved voxel set images to tmp/attn_voxels_{attn_word}_{i}")
+        video = render_utils.render_video(output_i['gaussian'][0])['color']
+        imageio.mimsave(f"tmp/attn_gs_{attn_word}_{i}.mp4", video, fps=30)
+        video = render_utils.render_video(output_i['mesh'][0])['normal']
+        imageio.mimsave(f"tmp/attn_mesh_{attn_word}_{i}.mp4", video, fps=30)
 
+def visualize_attention_from_global_attn(
+    pipeline,
+    coords,
+    prompt_attn ="a table with a lamp and a book.",
+    attn_word ="boots",
+    upsample_mode="nearest"
+    ):
+    attn = attn_globals.ATTN_COLLECT.get()
+    attn_processed = process_attn(attn, prompt_attn, attn_word, upsample_mode)
+    assert len(attn_processed.shape) == 4
+    for i in range(attn_processed.shape[0]):
+        render_voxel_set_images(is_gradually=True, voxels_L4=cat_attn_to_coords(torch.from_numpy(attn_processed[i]), coords.cpu())[:, 1:5],out_dir=f"tmp/attn_voxels_{attn_word}_{i}")
+        print(f"saved voxel set images to tmp/attn_voxels_{attn_word}_{i}")
+
+def first_diff_word_idx(str1, str2):
+    """
+    Returns the first word that is different between two strings.
+    If all words are the same up to the length of the shorter string, returns the first extra word in the longer string.
+    If no difference, returns None.
+    """
+    words1 = str1.split()
+    words2 = str2.split()
+    min_len = min(len(words1), len(words2))
+    for i in range(min_len):
+        if words1[i] != words2[i]:
+            return i
+    raise ValueError("No difference found between the two strings")
+
+def run_edit_text_from_attn(
+    pipeline,
+    prompt_generation,
+    prompt_attn,
+    output_dir = "tmp",
+    STEPS = 30,
+    only_on_self = False
+):
+    attn_globals.ATTN_COLLECT.set_only_on_self(only_on_self)
+    attn_globals.ATTN_COLLECT.number_of_steps = STEPS
+    differnet_idx = first_diff_word_idx(prompt_generation, prompt_attn)
+    differnet_word_new = prompt_attn.split()[differnet_idx]
+    differnet_word_old = prompt_generation.split()[differnet_idx]
+    differnet_col_lst = find_token_columns_for_prompt(pipeline, prompt_attn, differnet_word_new)
+    # pdb.set_trace()
+    attn_globals.ATTN_COLLECT.set_store_attn_each_layer(True)
+    outputs_org = pipeline.run(
+        prompt=prompt_generation,
+        seed=42,
+        sparse_structure_sampler_params = {"steps": STEPS}
+    )
+    print(f"stored {len(attn_globals.ATTN_COLLECT.attn_inject)} layers")
+    attn_globals.ATTN_COLLECT.set_store_attn_each_layer(False)
+    print(f"injecting attn from column {differnet_col_lst[0]}")
+    attn_globals.ATTN_COLLECT.set_inject_attn(True, differnet_col_lst[0])
+    attn_globals.ATTN_COLLECT.set_percentage_of_layers_to_inject(0.5)
+    attn_globals.ATTN_COLLECT.set_cond_old(pipeline.get_cond([prompt_generation]))
+    outputs_inject = pipeline.run(
+        prompt=prompt_attn,
+        seed=42,
+        prompt_old=prompt_generation,
+        sparse_structure_sampler_params = {"steps": STEPS}
+    )
+    attn_globals.ATTN_COLLECT.reset_cond_old()
+    attn_globals.ATTN_COLLECT.set_inject_attn(False)
+    # video = render_utils.render_video(outputs_inject['gaussian'][0])['color']
+    # imageio.mimsave(f"{output_dir}/attn_gs_inject_{differnet_word_new}.mp4", video, fps=30)
+    video = render_utils.render_video(outputs_inject['mesh'][0])['normal']
+    imageio.mimsave(f"{output_dir}/attn_mesh_inject_{differnet_word_new}.mp4", video, fps=30)
+    # video = render_utils.render_video(outputs_org['gaussian'][0])['color']
+    # imageio.mimsave(f"{output_dir}/attn_gs_org_{differnet_word_old}.mp4", video, fps=30)
+    video = render_utils.render_video(outputs_org['mesh'][0])['normal']
+    imageio.mimsave(f"{output_dir}/attn_mesh_org_{differnet_word_old}.mp4", video, fps=30)
+
+if __name__ == "__main__":
+    prompt_generation = "A man with a spear"
+    prompt_attn = "A man with a sword"
+    run_edit_text_from_attn(pipeline, prompt_generation, prompt_attn)#, only_on_self=True)

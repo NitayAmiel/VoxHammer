@@ -1,3 +1,4 @@
+from pyexpat import model
 from typing import *
 import torch
 import torch.nn as nn
@@ -226,7 +227,11 @@ class TrellisTextTo3DPipeline(Pipeline):
         # Sample occupancy latent
         flow_model = self.models['sparse_structure_flow_model']
         reso = flow_model.resolution
-        noise = torch.randn(num_samples, flow_model.in_channels, reso, reso, reso).to(self.device)
+        if attn_globals.ATTN_COLLECT.get_noise() is not None:
+            noise = attn_globals.ATTN_COLLECT.get_noise()
+        else:
+            noise = torch.randn(num_samples, flow_model.in_channels, reso, reso, reso).to(self.device)
+            attn_globals.ATTN_COLLECT.set_noise(noise.clone())
         sampler_params = {**self.sparse_structure_sampler_params, **sampler_params}
         z_s = self.sparse_structure_sampler.sample(
             flow_model,
@@ -234,8 +239,7 @@ class TrellisTextTo3DPipeline(Pipeline):
             **cond,
             **sampler_params,
             verbose=True
-        ).samples
-        
+        ).samples 
         # Decode occupancy latent
         decoder = self.models['sparse_structure_decoder']
         coords = torch.argwhere(decoder(z_s)>0)[:, [0, 2, 3, 4]].int()
@@ -305,6 +309,7 @@ class TrellisTextTo3DPipeline(Pipeline):
     def run(
         self,
         prompt: str,
+        prompt_old: str = None,
         num_samples: int = 1,
         seed: int = 42,
         sparse_structure_sampler_params: dict = {},
@@ -323,6 +328,9 @@ class TrellisTextTo3DPipeline(Pipeline):
             formats (List[str]): The formats to decode the structured latent to.
         """
         cond = self.get_cond([prompt])
+        cond_old = None
+        if prompt_old is not None:
+            cond_old = self.get_cond([prompt_old])
         torch.manual_seed(seed)
         coords = self.sample_sparse_structure(cond, num_samples, sparse_structure_sampler_params)
         slat = self.sample_slat(cond, coords, slat_sampler_params)
